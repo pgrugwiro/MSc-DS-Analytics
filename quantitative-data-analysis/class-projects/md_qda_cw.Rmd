@@ -1,0 +1,1011 @@
+---
+title: "Modern Data & Quantitative Data Analysis Coursework"
+author: "Phil Girurugwiro"
+date: "11/6/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## 0. Introduction and Objective
+
+The objective of this assignment is to showcase the skills and knowledge acquired during the term by carrying out a data analysis exercise using a real world dataset. 
+The data analysis exercise includes: understanding the data, cleaning and organizing the data, visualizing and presenting data in a creative way, and conducting predictive analytics on the dataset. 
+This assignment is submitted to fulfill the requirements of the coursework for CS5701 Quantitative Data Analysis and CS5702 Modern Data. 
+
+```{r echo= FALSE, message=FALSE, warning=FALSE}
+# Installing and loading libraries that will be used in this analysis
+
+packages = c("ggplot2", "validate", "kableExtra", "car", "lubridate", "gridExtra", "tree", 'tidyverse')
+
+# Load the package or install and load it
+package.check <- lapply(
+  packages,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE)
+      library(x, character.only = TRUE)
+    }
+  }
+)
+
+```
+
+
+## 1. Organise and clean the data
+
+### 1.1 Subset the data into the specific dataset allocated
+
+The dataset used in this assignment is a subset of a larger dataset provided by the module leaders. 
+
+```{r}
+# My student ID XXXX49 (Teams CHN & KCA)
+#Loading the data:
+
+load('CS5801_data.rda')
+
+#Subsetting the data to select 2 assigned teams and drop unused factor levels:
+
+mydata <- subset(CS5801.data, teamID.x=="CHN" | teamID.x=="KCA")
+mydata$teamID.x <- droplevels(mydata$teamID.x)
+
+#resetting index numbers:
+rownames(mydata) <- NULL
+
+```
+
+### 1.2 Data quality analysis
+
+To analyze the quality of the data, a thorough investigation of the dataset must be done. It starts with taking a look at the dataset globally and understanding its structure. This can be accomplished by using the $head()$ and $str()$ functions in R. 
+
+```{r echo=FALSE}
+
+head(mydata) %>%
+  kbl() %>%
+  kable_classic_2(full_width = F, html_font = "Arial") %>%
+  kable_styling(latex_options = "scale_down")
+
+```
+
+```{r}
+str(mydata)
+```
+
+At a glance, it is observed that the dataset contains 76 observations of 15 variables. The variables are a mix if character, integer, numeric, Date, and factor datatypes.
+A further description of each variable is given in the metadata (See table below) provided by the module leaders. 
+
+The metadata:
+
+```{r echo= FALSE, out.width= "50%", fig.align= "center"}
+knitr::include_graphics("images/metadata.PNG")
+```
+
+
+Upon consulting the metadata, an adjustment is made on the variable datatype for the $hit.in$ variable, changing it from $num$ data type to $factor$ datatype:
+
+```{r}
+mydata$hit.ind <- as.factor(mydata$hit.ind)
+```
+
+\newpage
+Further investigation of the dataset, coupled with the knowledge of the game of baseball, the variables are expected to follow a certain number of rules:
+
+1. Games (G), Runs (R), Hits (H), At bats (AB), Runs batted in (RBI), should all be integers greater than or equal to 0. Age, height, weight, career length, and salary (under normal circumstances) should equally be numerical values greater than 0, 
+
+2. RBI should be lower than Hits: for an RBI to happen, a Hit must happen. This makes the number of RBIs lower than number of Hits because not all hits produce runs,
+
+3. RBI, Runs, and Hits should be lower than AB, 
+
+4. The heaviest player in MLB history weighed 295 pounds and died in 2005. Player weight is expected to be lower than this historic record, 
+
+5. The shortest player in baseball history stood at 3 ft 7 in (42 in). Player height is expected to be higher than this historic record,  
+
+6. Birthdate: Since the data is from 2015 and all MLB players are expected to be adults, the maximum birth date must be no later than 1/1/1997 (18 years before 2015),
+
+7. A player's career length must be lower than his age,
+
+8. Hit.ind should be 1 if Hits > 0, and 0 if Hits = 0 as clearly stated in the metadata. 
+
+9. The data should not have any duplicates. 
+
+The first 8 rules are translated into conditional statements and used to check for the quality of (validate) the data by using the $validate$ package in R. 
+
+```{r}
+# Translate the rules into conditional statements using the validator
+# function from the validate package.
+
+v <- validator(G >= 0,              
+                 R >= 0,             
+                 H >=0,              
+                 AB >= 0,           
+                 RBI >= 0,           
+                 weight > 0,         
+                 height > 0,
+                 salary > 0,
+                 career.length > 0,
+                 age > 0,
+                 RBI <= H,
+                 RBI <= AB,
+                 R <= AB,
+                 H <= AB,
+                 weight < 295,
+                 height > 45,
+                 birthDate < "1997-1-1",
+                 career.length < age,
+                 if(H >0) hit.ind == 1 else hit.ind == 0)
+
+```
+
+```{r}
+#Confront the dataset with the set of rules translated above 
+#and print the summary of results: 
+
+cf <- confront(mydata, v)
+print(cf)
+```
+
+```{r echo = FALSE, fig.align='center'}
+              
+barplot(cf, main = NULL, space = .09, axisnames = FALSE)
+
+```
+It is confirmed, from the chart and summary above, that the dataset contains a number of errors that must be fixed before proceeding with the further analysis.
+
+\newpage
+
+### 1.3 Data cleaning  
+ 
+The dataset was confronted with 19 rules. Eight of these rules failed the check and 12 rows were affected. 
+In the following section, the failed checks and steps taken to deal with them are discussed.  
+
+**- Incidents where hit.ind is 1 when there were no hits or 0 when there were:** 
+
+The code below ensures that wherever the number of hits is at least 1, hit.ind is 1, and wherever the number of hits is 0, hit.ind is 0.
+
+```{r}
+#Ensure that hit.ind is 1 whenever the number of hits is at least 1
+mydata$hit.ind[mydata$H > 0] <- 1
+
+#Ensure that hit.ind is 0 whenever the number of hits is 0
+mydata$hit.ind[mydata$H == 0] <- 0
+```
+
+**- Incidents where recorded player height is below 4 ft:**
+
+The data validation summary shows that there are 2 players whose registered height is below 4 feet. This is highly irregular. Rather than dropping these players, their erroneous/irregular height are replaced with the dataset's height average as follows:
+
+```{r}
+#impute height for players whose recorded height is below 48 inches:
+
+mydata$height[mydata$height < 48] <- mean(mydata$height)
+```
+
+**- Incidents where runs batted in is greater than hits (impossible):**
+
+At the maximum, the number of runs batted in should be equal to number of hits, but not greater. For a RBI to take place, a H should take place. In the long run, we end up with more hits than runs batted in. In cases where this rule is violated, RBI was equated to H. 
+
+```{r}
+#For each row in the dataset, if RBI is greater than H, replace the RBI value with 
+#the H value.
+
+for(i in 1:nrow(mydata)){
+  if(mydata$RBI[i] > mydata$H[i]){
+  mydata$RBI[i] <- mydata$H[i]
+  }
+}
+```
+
+**- Incidents where age or birthday of player is wrong:**
+
+Generally, we cannot guess which entry is wrong between age or birthdate. It would also be risky to impute these values with teams averages since age may have an impact on player's salary and career length. These incidents are dropped from the dataset. 
+
+```{r}
+#Put a placeholder 'NA' in places where player's birth year + age is greater than the 
+#year of data collection, 2015. 
+
+for(i in 1:nrow(mydata)){
+  if((mydata$age[i] + year(mydata$birthDate[i])) > 2015){
+  mydata$age[i] <- NA
+  mydata$birthDate[i] <- NA
+  }
+}
+```
+
+**- Incidents where career length is greater than player's age: **
+
+Practically, a player's career's age should not be greater than his or her age. Our data validation indicates that some entry(ies) may have failed this check. Since it would be risky to impute a player's career length or age, it is more appropriate to simply drop this player's record from the dataset before further analysis.
+
+```{r}
+#Put a placeholder 'NA' in places where player's career length is greater than his or 
+#her age. 
+
+mydata$age[mydata$age < mydata$career.length] <- NA
+```
+
+**- Incidents where player was born after 1997: **
+
+The validation also discovered player(s) who were born after 1997, which would make them too young to play baseball on a professional level. 
+Once again, it would be risky to give them a different age. Their entries are dropped. 
+
+```{r}
+#Put a placeholder 'NA' in places where player's birthdate is greater than 1997
+
+mydata$birthDate[mydata$birthDate > "1997-1-1"] <- NA
+
+```
+
+**- Incidents where player's weight is greater than 295 lbs: **
+
+The data validation also discovered a player who weighs more than the heaviest player in history of baseball on record. 
+For this particular player(s), their weight is replaced with dataset's player weight average.
+
+```{r}
+#Imputing player weight for player(s) who weigh more than the historic number.
+
+mydata$weight[mydata$weight > 295] <- mean(mydata$weight)
+```
+
+**- Incidents where runs were greater than at bats: **
+
+Runs cannot be greater than at bats. For a player to score a run, he or she must have appeared on the plate to bat. For a perfect player, the maximum runs he or she can have could be equal but not greater than at bats. Runs values that violate this rule are replaced with their corresponding at bat values with the code below:
+
+```{r}
+#Replace R value with AB value for every incident where R > AB
+
+for(i in 1:nrow(mydata)){
+  if(mydata$R[i] > mydata$AB[i]){
+  mydata$R[i] <- mydata$AB[i]
+  }
+}
+```
+
+\newpage
+**- Incidents where runs batted in is less than 0: **
+
+Runs batted in cannot be negative. 
+
+```{r}
+#Change RBI to 0 if RBI is negative:
+mydata$RBI[mydata$RBI < 0] <- 0
+```
+
+At this point, all the errors have been addressed but NA values have been introduced into the dataset. NA values can be dropped and finally, the dataset can be checked for duplicates. 
+
+```{r}
+#Drop the NA values introduced during the data cleaning process:
+mydata <- drop_na(mydata)
+#Ensure that the dataset does not have any duplicate values (Rule 9):
+mydata <- unique(mydata)
+#Confront the new clean dataset with the set of rules translated above and print 
+#the summary of results: 
+cf <- confront(mydata, v)
+print(cf)
+
+```
+
+```{r echo=F}
+
+barplot(cf, main = NULL, space = .09, axisnames = FALSE)
+```
+```{r}
+str(mydata)
+```
+
+All the errors are removed and all the variables have the correct data type. At this point, the dataset is clean and ready for further exploratory analysis. 
+
+\newpage
+## 2. Exploratory Data Analysis (EDA)
+
+### 2.1 EDA plan
+
+The purpose of exploratory data analysis is to interrogate data with the purpose to separate facts from myths and potentially uncover hidden insights. It is also here that we uncover potential data problems with data that escaped the data cleaning process, understand the innate nature of data (distribution type, correlation of variables, outliers, etcs.. ). A good knowledge of the data is the foundation of a trustworthy data analysis and if a model is to be built on a dataset, it is important that data being fed into the model be accurate and thoroughly understood. The plan is to analyze the data and ask relevant questions at a team level, game level, and player level. 
+
+TEAM LEVEL ANALYSIS:
+
+- Which team is spending more money on players? 
+- Which team has more runs per game?
+- Which team has more hits per AB?
+- Which team has more game veterans (as expressed by career length)
+- Which team has older players (as expressed by age)
+- Which team has healthier players (as measured by BMI)? 
+- Which team has more left batters than right batters?
+
+GAME LEVEL ANALYSIS:
+
+- Confirm linear relationship between Games and AB
+- Confirm linear relationship between Hits and Runs
+- Confirm linear relationship between Hits and RBI
+
+PLAYER LEVEL ANALYSIS:
+
+- Relationship between age and salary
+- Relationship between career length and salary
+- Relationship between runs and salary
+- Relationship between hits and salary
+- Relationship between age/career length and games played
+- Right handed batters vs left handed batters vs the number of hits/runs
+- Right handed batters vs. left handed batters vs. hit.ind
+- Do players gain weight as they age?
+- Do players get taller as they age?
+
+
+\newpage
+### 2.2 EDA and summary of results  
+
+#### 1. Which team is spending more money on players?
+
+A distribution of player salaries by team allows for a visual comparison of team salary spend. A statistical comparison of the salary averages per team also helps determine if one team is spending significantly more money than the other on player salaries.
+
+```{r fig.height= 4, fig.align='center', fig.width=4, echo=FALSE}
+mydata %>%
+  ggplot(aes(x = teamID.x, y = salary, fill = teamID.x)) +
+  geom_boxplot(outlier.shape = 4, outlier.size = 5, outlier.colour = 'red') +
+  ggtitle('Boxplot of Player Salary vs. Team') +
+  xlab('Team ID') +
+  ylab('Player Salary') +
+  theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+```
+**Outliers:**
+
+Even thought the median salary for both teams is around USD250,000, there are quite a few players making more than USD 10 million. 
+
+```{r echo=FALSE}
+mydata %>%
+  filter(salary > 10e6) %>%
+  kbl() %>%
+  kable_classic_2(full_width = F, html_font = "Arial") %>%
+  kable_styling(latex_options = "scale_down")
+```
+
+Team CHN seems to have more high salary earners compared to KCA. In particular, player lestejo01's performance, although remarkable, does not seem to be exceptional enough to warrant a 20M dollar salary, the most severe outlier observed in the dataset. 
+
+To statistically determine if there's indeed one team that is spending more money in salaries, a 2-sample t-test can be done on the salary data:
+
+```{r}
+x <- mydata %>% filter(teamID.x == 'CHN')
+y <- mydata %>% filter(teamID.x == 'KCA')
+
+t.test(x$salary, y$salary)
+
+sum(x$salary) -sum(y$salary)
+
+```
+
+Team CHN spent $23.3M more in total salary payouts to the players compared to team KCA. This further emphasize the influence of the salary outlier identified in the previous graph. However, on per player average, the t-test concludes that the salary payout is statistically the same for both teams. 
+
+#### 2. Which team has more runs per game?
+
+One key parameter in identifying a better performing player/team is the number of runs achieved in a game. 
+
+```{r fig.height = 4, fig.width= 3, fig.align = 'center', echo=FALSE}
+
+a <- mydata %>%
+  ggplot(aes(teamID.x, R/G, fill = teamID.x)) +
+  geom_boxplot()+
+  ggtitle('Boxplot of Player RPG vs. Team') +
+  xlab('') +
+  ylab('Runs Per Game') +
+  theme(legend.position = 'none')+
+  theme(text = element_text(size=8), plot.margin = unit(c(0,0,0,0), "cm"))
+
+b <- mydata %>%
+  ggplot(aes(R/G, fill = teamID.x)) +
+  geom_density(alpha = 0.666)+
+  ggtitle('Density Plot of Player RPG vs. Team') +
+  xlab('Runs Per Game') +
+  ylab('') +
+  theme(legend.position = 'none')+
+  theme(text = element_text(size=8), plot.margin = unit(c(0,0,0,0), "cm"))
+
+grid.arrange(a,b)
+```
+
+Two distinct distributions are observed: Team CHN median RPG is slightly above 0.1 while team KCA median RPG is around 0.02. Looking at the IQR, Team CHN is relatively more homogeneous in terms of player performance measured in RPG compared to KCA.
+
+We can still run a t.test to compare the means of runs per game for the two teams:
+
+```{r}
+x <- mydata %>% filter(teamID.x == 'CHN')
+y <- mydata %>% filter(teamID.x == 'KCA')
+
+t.test(x$R/x$G, y$R/y$G)
+```
+
+The t.test concludes that the two teams' runs per game means are not unequal. 
+
+#### 3. Other player parameters: age, career length, height*weight, and batting hand:
+\
+
+```{r echo=FALSE}
+a <- mydata %>%
+  ggplot(aes(teamID.x, age, fill = teamID.x)) +
+  geom_boxplot() +
+  xlab('') +
+  ylab('') +
+  ggtitle('Distribution of Players Age') +
+  theme(legend.position = 'none') +
+  theme(plot.title = element_text(size = 8))
+
+b <- mydata %>%
+  ggplot(aes(teamID.x, career.length, fill = teamID.x)) +
+  geom_boxplot() + 
+  xlab('') +
+  ylab('') +
+  ggtitle('Distribution of Players Career Length') +
+  theme(legend.position = 'none')+
+  theme(plot.title = element_text(size = 8))
+
+
+c <- mydata %>%
+  ggplot(aes(teamID.x, 703*weight/(height^2), fill = teamID.x)) +
+  geom_boxplot() +
+  xlab('') +
+  ylab('') +
+   ggtitle('Distribution of Players BMI') +
+  theme(legend.position = 'none')+
+  theme(plot.title = element_text(size = 8))
+
+
+d <- mydata %>%
+  ggplot(aes(teamID.x, fill = bats)) +
+  geom_bar() +
+  xlab('') +
+  ylab('') +
+  ggtitle('Count of Player\'s Batting Hand') +
+  theme(legend.title = element_blank())+
+  theme(plot.title = element_text(size = 8))
+
+
+grid.arrange(a, b, c, d)
+```
+
+In the figures above, we can conclude visually that there are no significant differences between the two teams' player ages. This will further be confirmed with t-testing. 
+In terms of career length, one severe outlier is observed in the data for team CHN. This will further be investigated as the number seems to be highly irregular and escaped the data cleaning step. 
+In terms of BMI (body mass index), which is a health parameter that accounts for the weight and height of an individual, numbers above 30 (considered obese) are rarely observed for athletes. There is one outlier observed for team CHN who falls into the obese category.  
+
+**T-test to compare the age of players:**
+
+```{r}
+x <- mydata %>% filter(teamID.x == 'CHN')
+y <- mydata %>% filter(teamID.x == 'KCA')
+
+t.test(x$age, y$age)
+```
+
+T-test fails to reject the null hypothesis: both team's mean players age are equal. 
+
+**T-test to compare the career length of players:**
+
+```{r}
+x <- mydata %>% filter(teamID.x == 'CHN')
+y <- mydata %>% filter(teamID.x == 'KCA')
+
+t.test(x$career.length, y$career.length)
+```
+
+T-test fails to reject the null hypothesis: both team's mean players career length are equal. 
+
+**T-test to compare the Body Mass Index (BMI) of player:**
+
+```{r}
+x <- mydata %>% filter(teamID.x == 'CHN')
+y <- mydata %>% filter(teamID.x == 'KCA')
+
+t.test(703*x$weight/(x$height^2), 703*y$weight/(y$height^2))
+```
+
+T-test fails to reject the null hypothesis: both team's mean players body mass index are equal. 
+
+The two are nearly identical teams in terms of player salary, age, career length, and physical fitness as well as overall team performance. 
+
+
+Next, the attention is focused on to game-level statistics. It is expected that the data will confirm the following statements:
+- The more games played, the more at bats opportunities: a linear relationship must exist between G and AB 
+- The more at bats opportunities, the more hits made: a linear relationship must exist between AB and H
+- The more hits made, the more runs scored and more runs batted in assigned: a linear relationship must exist between H and R/RBI. 
+
+```{r echo=F, message=F, warnings=F}
+
+a <- mydata %>% 
+  ggplot(aes(G, AB, col = teamID.x)) +
+  geom_point() + theme(legend.position = "none") +
+  xlab('Games') +
+  ylab('At Bats')+
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x')+
+  theme(text = element_text(size=8))
+
+b <- mydata %>%
+  ggplot(aes(AB, H, col = teamID.x)) +
+  geom_point() + theme(legend.position = "none")+
+  xlab('At Bats') +
+  ylab('Hits')+
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x')+
+  theme(text = element_text(size=8))
+
+c <- mydata %>%
+  ggplot(aes(H, R, col = teamID.x)) +
+  geom_point() + theme(legend.position = "none")+
+  xlab('Hits') +
+  ylab('Runs')+
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x')+
+  theme(text = element_text(size=8))
+
+d <- mydata %>%
+  ggplot(aes(H, RBI, col = teamID.x)) +
+  geom_point() + theme(legend.position = 'none')+
+  xlab('Hits') +
+  ylab('Runs Batted In')+
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x') +
+  theme(text = element_text(size=8))
+
+grid.arrange(a, b, c, d)
+
+```
+
+The plots above do indeed confirm the statements set forth.
+
+\newpage
+Finally, taking a look at the player-level statistics to determine: 
+
+**Salary:**
+
+- Relationship between age and salary
+- Relationship between career length and salary
+- Relationship between runs per game and salary
+- Relationship between hits per game and salary
+
+
+```{r fig.height= 3.5, fig.width= 6, fig.align= 'center',   echo=F}
+a <- mydata %>%
+  filter(career.length != max(career.length)) %>%
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(age, salary, col= teamID.x)) +
+  geom_point() +
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+b <- mydata %>%
+  filter(career.length != max(career.length)) %>% 
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(career.length, salary, col= teamID.x)) +
+  geom_point() +
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+c <- mydata %>%
+  filter(career.length != max(career.length)) %>% 
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(R/G, salary, col= teamID.x)) +
+  geom_point() +
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+d <- mydata %>%
+  filter(career.length != max(career.length)) %>% 
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(H/G, salary, col= teamID.x)) +
+  geom_point() +
+  stat_smooth(level = .5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+
+grid.arrange(a, b, c, d, ncol = 2)
+```
+```{r fig.height= 3.5, fig.width=6, fig.align= 'center', echo=F}
+
+e <- mydata %>%
+  filter(career.length != max(career.length)) %>% 
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(G, salary, col= teamID.x)) +
+  geom_point() +
+  stat_smooth(level = .5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+f <- mydata %>%
+  filter(career.length != max(career.length)) %>% 
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(AB, salary, col= teamID.x)) +
+  geom_point() +
+  stat_smooth(level = .5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+g <- mydata %>%
+  filter(career.length != max(career.length)) %>% 
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(height, salary, col= teamID.x)) +
+  geom_point() +
+  stat_smooth(level = .5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+h <- mydata %>%
+  filter(career.length != max(career.length)) %>% 
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(weight, salary, col= teamID.x)) +
+  geom_point() +
+  stat_smooth(level = .5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+
+grid.arrange(e, f, g, h, ncol = 2)
+```
+
+Curvature is observed in each of the graphs above, indicating that none of the variables considered has a direct linear relationship with the salary.
+
+\newpage
+
+**Games played:** 
+
+- Relationship between age and games played
+- Relationship between career length and games played
+
+```{r fig.height= 3, fig.width= 7, fig.align= 'center', echo=F, message=FALSE}
+a <- mydata %>%
+  filter(career.length != max(career.length)) %>%
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(age, G, col= teamID.x)) +
+  geom_point() +
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+b <- mydata %>%
+  filter(career.length != max(career.length)) %>% 
+  filter(salary != max(salary)) %>% 
+  ggplot(aes(career.length, G, col= teamID.x)) +
+  geom_point() +
+  geom_smooth(level = 0.5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+
+grid.arrange(a,b, ncol = 2, padding = FALSE)
+```
+
+No clear relationship between the number of games played and age/career length of individual players. This indicates that veterans do not necessarily get to play more games compared to young players. 
+
+```{r fig.height= 3, fig.width= 7, fig.align= 'center', echo=F, echo=F}
+a <- mydata %>%
+    filter(career.length != max(career.length)) %>% 
+    filter(salary != max(salary)) %>% 
+    ggplot(aes(age, weight, col= teamID.x)) +
+    geom_point() +
+    geom_smooth(level = 0.5, method = 'loess', formula = 'y~x') + theme(legend.position = 'none')+
+    theme(text = element_text(size=8))+
+    ggtitle('Weight vs. Age')
+
+b <- mydata %>%
+    ggplot(aes(teamID.x, H, fill = bats)) +
+    geom_boxplot()+
+    ggtitle('Density Plot of Player RPG vs. Team') +
+    xlab('Runs Per Game') +
+    ylab('') +
+    theme(legend.position = 'right')+
+  theme(text = element_text(size=8))
+
+
+grid.arrange(a,b, ncol = 2)
+
+```
+
+As observed in the graphs above, it can be concluded that players do not necessarily add on weight as they get older, which is commendable. It can also be somewhat concluded that ambidextrous players get more runs per game, followed by left handed batters, subject to further statistical analysis.
+
+\newpage
+
+Another variable to consider in the EDA is the $hit.ind$ variable. From the plots below, it can be observed that independent variables such as Runs and At bats are very good predictors of hit.ind. Variables such as RBI and Hits are perfect indicators for hit.ind since it was directly derived from them. Other variables, however, such as age, weight, height, etc... have no impact to the $hit.ind$ variable.
+
+```{r message=F, echo=F, warning=F, fig.height= 3.5, fig.width=6, fig.align= 'center'}
+a <- mydata %>%
+    ggplot(aes(hit.ind, R, col = hit.ind)) +
+    geom_boxplot()+
+    ggtitle('Runs vs. Hit.ind') +
+    xlab('') +
+    theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+b <- mydata %>%
+    ggplot(aes(hit.ind, G, col = hit.ind)) +
+    geom_boxplot()+
+    ggtitle('Games vs. Hit.ind') +
+    xlab('') +
+    theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+c <- mydata %>%
+    ggplot(aes(hit.ind, salary, col = hit.ind)) +
+    geom_boxplot()+
+    ggtitle('Salary vs. Hit.ind') +
+   
+    xlab('') +
+    theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+d <- mydata %>%
+    ggplot(aes(hit.ind, career.length, col = hit.ind)) +
+    geom_boxplot()+
+    ggtitle('Career Length vs. Hit.in') +
+    xlab('') +
+    theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+grid.arrange(a, b, c, d, ncol = 2)
+
+```
+
+```{r message=F, echo=F, warning=F, fig.height= 3.5, fig.width=6, fig.align= 'center'}
+a <- mydata %>%
+    ggplot(aes(hit.ind, age, col = hit.ind)) +
+    geom_boxplot()+
+    ggtitle('Age vs. Hit.ind') +
+    xlab('') +
+    theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+b <- mydata %>%
+    ggplot(aes(hit.ind, height, col = hit.ind)) +
+    geom_boxplot()+
+    ggtitle('Height vs. Hit.ind') +
+    xlab('') +
+    theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+c <- mydata %>%
+    ggplot(aes(hit.ind, weight, col = hit.ind)) +
+    geom_boxplot()+
+    ggtitle('Weight vs. Hit.ind') +
+   
+    xlab('') +
+    theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+d <- mydata %>%
+    ggplot(aes(hit.ind, AB, col = hit.ind)) +
+    geom_boxplot()+
+    ggtitle('AB vs. Hit.in') +
+    xlab('') +
+    theme(legend.position = 'none')+
+  theme(text = element_text(size=8))
+
+grid.arrange(a, b, c, d, ncol = 2)
+
+```
+\newpage
+
+### 2.3 Additional insights and issues
+
+Two additional data issues were identified in the EDA. A severe outlier in salaries of team CHN, a player whose performance is unremarkable but earned $20M. It could have been a player on an injury list, it could have been a typo in data entry. Whatever the case is, this datapoint is outside the bounds of expected range. Another outlier was observed in the career length of one of the players in the same team, team CHN. This player has a recorded 24 year career but is only 31 years of age. These two data points are dropped from the dataset. 
+
+```{r}
+#Remove maximum salary:
+mydata$salary[mydata$salary == max(mydata$salary)] <- NA
+#Remove maximum career length:
+mydata$career.length[mydata$career.length == max(mydata$career.length)] <- NA
+
+
+#Final Clean Dataset:
+clean_data <- drop_na(mydata)
+```
+
+\newpage
+## 3. Modelling
+
+### 3.1 Build a model for player salary
+
+The final dataset achieved is clean enough to build a model upon. Severe outliers have been removed and other data issues have been resolved. The EDA also determined that team CHN and KCA are nearly identical from player performance and salary points of view. Therefore, the model can be built on the combined set of teams.
+Below is the distribution of player salary for both teams. 
+
+```{r fig.height= 3, fig.width= 6, fig.align= 'center', echo=F}
+ a <- clean_data %>%
+  ggplot(aes(salary, col = teamID.x)) +
+  geom_density( alpha = 0.666)+
+  ggtitle('Density Plot of Player Salary') +
+  xlab('Salary') +
+  theme(text = element_text(size=8), legend.position = 'none')+
+  scale_x_continuous(trans = 'log2')
+
+ b <- clean_data %>%
+  ggplot(aes(salary)) +
+  geom_density(fill = 'brown',  alpha = 0.666)+
+  ggtitle('Density Plot of Player Salary') +
+  xlab('Salary') +
+  theme(text = element_text(size=8))+
+  scale_x_continuous(trans = 'log2')
+ 
+ grid.arrange(a, b, ncol = 2)
+```
+
+Both teams have two humps in their salary distributions: low earning players who earn around USD 500K and high earning players who have multi-million dollar salaries.
+This might have a significant impact to our salary prediction. 
+
+**Model building**
+
+For the purpose of reducing the number of variables without losing their predictive power, the weight and height values were combined to form one new variable, the body mass index or BMI. It was also observed in EDA that several variables were collinear. 
+
+When faced to multicollinearity, the concerned variables should be removed, since the presence of multicollinearity implies that the information that this variable provides about the response is redundant in the presence of the other variables (James et al. 2014; P. Bruce and Bruce 2017).
+
+The plan is to build a multiple regression model that predicts the player salaries from a given set of independent variables. 
+
+The dataset is first subset to only include the numerical/continuous variables that are used in the model. 
+
+```{r message=F, warning=F}
+reg_df <- clean_data %>%
+  mutate(BMI = 703*weight/height^2) %>%
+  select(G, R, H, AB, RBI, salary, career.length, age, BMI)
+
+```
+
+Calculate the variance inflation factor (VIF) to check for presence of multi-collinearity with a simple multiple regression model:
+
+```{r}
+vif(lm(salary~., reg_df))
+```
+
+As expected and observed in EDA section, Runs, Hits, At Bats, and Runs Batted In show signs of extreme collinearity. Including these variables will result in an unstable model with complex redundant interactions. 
+
+We can remove the top 2 offenders from the data.
+
+```{r}
+#Remove H and AB variables to reduce collinearity
+
+reg_df <- reg_df %>%
+  select(-H, -AB)
+```
+
+The next step is to visualize interactions between the response and independent variables. This is accomplished by a tree model:
+
+
+```{r}
+tree_model <- tree(salary~., data = reg_df)
+plot(tree_model)
+text(tree_model)
+```
+\newpage
+
+According to the tree model, career length has a big impact to the salary of players. It should also be noted that this model shows no complex interactions between the variables in the dataset. This is welcome news. 
+
+We begin with a maximal model that comprises of all variables and their interactions, as well as their quadratic terms. The tree model showed little evidence of complex interactions, therefore, we will only consider 2-way interactions in the model. The quadratic terms are included to study the impact of curvature that was observed in the EDA section. This stretches the model to the limit since there are barely 3 datapoints per parameter. 
+
+
+```{r}
+#maximal model containing independent variables
+#two-way interactions and
+#quadratic terms. 
+mod1 <- lm(salary~ G+age+career.length+BMI+RBI+
+             G:career.length +
+             G:age+                          
+             career.length:age +            
+             G:BMI +                        
+             career.length:BMI+             
+             age:BMI   +                    
+             G:RBI +                        
+             career.length:RBI+            
+             age:RBI +                      
+             BMI:RBI +                      
+             G:R  +                         
+             career.length:R  +             
+             age:R  +                        
+             BMI:R  +                       
+             RBI:R  +
+             I(G^2)+I(career.length^2)+I(age^2)+I(BMI^2)+I(RBI^2)+I(R^2), reg_df)
+             
+```
+
+\newpage
+Below is the summary of the maximal model.
+
+```{r}
+summary(mod1)
+```
+
+The model is significant, with a $p_value$ of 0.0002, but there are several features that are not significant. 
+
+We can use the $step$ function to speed up the model reduction process to remove non-significant features and to achieve the minimal adequate model:
+
+
+```{r results='hide'}
+#use the step function to reduce model 1. 
+mod2 <- step(mod1)
+```
+
+The summary for model 2: 
+
+```{r}
+summary(mod2)
+```
+
+Model 2 is very significant, and nearly all the parameters are significant. We can further simplify the model by removing the non-significant and marginally significant parameters:
+
+```{r results='hide'}
+#Remove non-significant and marginally significant parameters:
+
+mod3 <- update(mod2, ~. -G:R -age:BMI -career.length:BMI -BMI -G:BMI -I(RBI^2) -BMI:R -I(age^2)) 
+```
+
+Below is the summary for model 3:
+
+```{r}
+summary(mod3)
+```
+
+We can call the $step$ function one last time on model 3 to achieve the desired minimal adequate model:
+
+```{r results='hide'}
+#minimal adequate model:
+mod4 <- step(mod3)
+
+```
+
+\newpage
+
+Below is the summary for the minimal adequate model:
+
+```{r}
+summary(mod4)
+```
+\newpage
+
+### 3.2 Critique model using relevant diagnostics
+
+The minimal adequate model achieved in 3.1 is 'adequate'. It contains nearly all significant parameters. It re-emphasize the significance of career length as a primary factor in predicting a player's salary. It also shows the interactions between career length and age, games, and runs as observed in the tree model. 
+
+The diagnostics plot below provide more information on the adequacy of the model. The goodness of fit plot shows constancy of variance, which is desired. The QQ plot also shows the normality of errors, which is a desirable attribute of an adequate model. 
+
+```{r echo=F}
+par(mfrow = c(2,2))
+plot(mod4)
+```
+
+
+### 3.3 Suggest improvements to your model
+
+We were able to build an adequate model that predicts the player salary based on game parameters, as well as biometric information of the player. 
+Even though the model showed homoscedasticity and normality of errors, the coefficient of regression achieved was only 54%. This is somewhat expected since a player's salary depends on may other parameters than showed in the dataset. 
+One possible key variable that can further enhance the model is a player's position. It is also difficult to predict salaries based on just 1 season. Including data from multiple seasons, as well as multiple teams can greatly improve the prediction model. 
+
+\newpage
+
+## 4. Extension work
+
+### 4.1 Model the likelihood of a player having scored a Hit (using the hit.ind variable provided).
+
+From EDA, it was observed that age, weight, height, salary and career length had no visible impact to the variable $hit.ind$, whereas variables Hits, Runs and Runs batted in are perfect predictors of the $hit.ind$ variable. 
+In order to build a model that is worth our while, the only variables remaining are Games, At Bats, and Runs. 
+
+We begin with a model that includes all three variables:
+
+```{r warning=F}
+log_model <- glm(hit.ind~ G+R+AB, family = 'binomial', data = clean_data)
+summary(log_model)
+```
+
+This model is simple and minimal enough and will not be further simplified. The Residual deviance of 16 is well below the degrees of freedom, which is desirable. A very low AIC value of 24 is also recorded. 
+
+Inspecting the odds ratios:
+
+```{r}
+(exp(coef(log_model)))^-1
+```
+
+For each game played, there are equal chances of recording a hit. For each run scored, the odds of recording a hit are increased eight-fold, and for each at bat appearance, it's expected that half the time, a hit is recorded.
+
+We can further use our model to predict the probability of recording a hit:
+
+```{r echo=F}
+clean_data$pred_hit <- predict(log_model, type = "response")
+head(select(clean_data, playerID, teamID.x,hit.ind, pred_hit))%>%
+  kbl() %>%
+  kable_classic_2(full_width = F, html_font = "Arial", font_size =12) 
+```
+
+```{r fig.align='center', fig.height=4, fig.width=6, message=F, warning=F, echo=F}
+df <- clean_data %>%
+  select(G, hit.ind, pred_hit) %>%
+  gather(key = 'hit', value = 'value', -G)
+
+df$value <- as.numeric(df$value)
+
+df %>%
+  ggplot(aes(G, value)) +
+  geom_point(aes(color = hit, shape = hit))+
+  theme(legend.position = 'bottom', legend.title = element_blank())
+```
+
+
+## References  
+
+1. Bruce, Peter, and Andrew Bruce. 2017. Practical Statistics for Data Scientists. O’Reilly Media.
+
+2. James, Gareth, Daniela Witten, Trevor Hastie, and Robert Tibshirani. 2014. An Introduction to 
+Statistical Learning: With Applications in R. Springer Publishing Company, Incorporated.
